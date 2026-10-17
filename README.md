@@ -19,8 +19,8 @@ caller ──ask(body)──▶ AskSwarmRegistry ──requestWithFailure──�
                                      verify EIP-712 ▸ store ▸ index by questionHash
 ```
 
-1. `ask(bytes body)` pulls exactly `Intake.priceOf(action, IMD)` from the caller and forwards it in
-   the same call. `body` is the oracle.request JSON the HTTP door takes. The contract never holds IMD
+1. `ask(bytes body)` pulls exactly `Intake.priceOf(action, IMD)` from the caller, approves Intake
+   for exactly that amount, and forwards it in the same call. `body` is the oracle.request JSON the HTTP door takes. The contract never holds IMD
    between calls.
 2. Intake registers this contract as callback (`onOracleResult`, selector `0x510379c7`) and failure
    hook (`onFailure`), and emits `Requested` with the body.
@@ -29,7 +29,9 @@ caller ──ask(body)──▶ AskSwarmRegistry ──requestWithFailure──�
 4. `onOracleResult` recomputes the EIP-712 digest under domain
    `{"IdentityMD Oracle", "2", chainId, address(this)}`, recovers the signer, and sets `verified` only
    when the attester matches, `agreed >= quorum`, and the attestation has not expired. The answer is
-   stored in three slots (measured ~105k gas) and, if verified, becomes `latestFor[questionHash]`.
+   stored in three slots (measured ~105k gas) and, if verified and agreed on by a strict majority of
+   its panel (`agreed * 2 > panelSize`), becomes `latestFor[questionHash]`, unless a still-current
+   answer from a larger panel with more agreement holds it.
 5. Refusals (status 1) and split panels (status 2) land in `onFailure` and are recorded by status, so
    a reader can tell "no consensus" from "never asked".
 
@@ -68,11 +70,17 @@ Sepolia), attester `0x5598aa9146215bc13eb26f2c692ad1461fd32982`.
 
 ## Tests
 
-Mainnet fork tests against the real Intake and IMD, impersonating Intake's writer to deliver results:
+Plain `forge test` runs everything offline, against mocks of Intake v2 and IMD
+(`test/mocks/IntakeMocks.sol`) etched at the real addresses. With a fork URL the same tests run
+against the real Intake and IMD, impersonating Intake's writer to deliver results:
 
 ```
+forge test
 forge test --fork-url $ETH_RPC_URL -vv
 ```
+
+`test/OracleConsumerConformance.t.sol` checks the digest and the callback selector against the
+oracle protocol's published vector and signature.
 
 Covers: price pull and registration, delivery inside the stipend with `delivered == true`, signature
 tamper, wrong domain, quorum and expiry gating, failure hook, access control, 352-byte answers, and a
